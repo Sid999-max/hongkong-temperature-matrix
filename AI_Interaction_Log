@@ -1,0 +1,74 @@
+# AI Interaction Log – Assignment 1
+Hong Kong Monthly Temperature Matrix (D3.js)
+
+## Overview
+
+For this assignment, I used AI (ChatGPT) as a development assistant while implementing the matrix visualization in D3.js. The AI was used primarily for structuring the D3 architecture, refining interaction logic, and debugging data parsing issues.
+
+I verified and modified all AI-generated suggestions to ensure they satisfied the assignment requirements and matched the provided example visualization.
+
+---
+
+## 1. Understanding the Assignment Requirements
+
+Initially, I clarified the assignment expectations:
+
+- Matrix layout:
+  - X-axis → Year
+  - Y-axis → Month
+- Each cell:
+  - Background color encodes monthly max/min temperature
+  - Mini line chart showing daily changes
+- Click interaction:
+  - Toggle between maximum and minimum temperature mode
+- Hover interaction:
+  - Tooltip showing date and temperature value
+- Vertical legend mapping temperature to color
+
+AI helped break the problem into modular components:
+- Data parsing
+- Data grouping (year → month)
+- Matrix layout rendering
+- Mini line chart drawing
+- Legend creation
+- Interaction logic
+
+---
+
+## 2. Data Parsing & Debugging
+
+One major issue encountered was:
+
+- The visualization rendered incorrectly.
+- Years showed as `NaN`.
+- Matrix cells were empty.
+
+With AI assistance, I identified that:
+
+The CSV column names were:
+- `date`
+- `max_temperature`
+- `min_temperature`
+
+But the initial script was reading:
+- `Date`
+- `Max_Temperature`
+- `Min_Temperature`
+
+This mismatch caused invalid date parsing and resulted in `NaN` values.
+
+I corrected the `parseRow()` function to match the actual dataset structure:
+
+```js
+function parseRow(d) {
+  const dt = new Date(d.date);
+
+  return {
+    date: dt,
+    year: dt.getFullYear(),
+    month: dt.getMonth() + 1,
+    day: dt.getDate(),
+    max: +d.max_temperature,
+    min: +d.min_temperature
+  };
+}
