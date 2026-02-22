@@ -1,182 +1,232 @@
-// ==============================
-// CONFIG
-// ==============================
+/**********************************************************************
+ * Hong Kong Monthly Temperature Matrix (Last 10 Years)
+ * 
+ * Assignment: Matrix View Visualization using D3.js
+ * 
+ * Requirements satisfied:
+ * - X-axis: Year
+ * - Y-axis: Month
+ * - Each cell color encodes monthly max/min temperature
+ * - Click button toggles between MAX and MIN mode
+ * - Tooltip displays date and temperature value
+ * - Mini line charts show daily temperature changes
+ * - Vertical legend shows temperature scale
+ * 
+ * Code Design Principles:
+ * - Modular structure (separation of concerns)
+ * - Clear state management
+ * - Reusable update logic
+ * - Extensive comments for readability
+ **********************************************************************/
+
+// ========================== CONFIGURATION ============================
+
+// CSV file path
 const DATA_FILE = "temperature_daily.csv";
+
+// Only display last 10 years of dataset
 const YEARS_TO_SHOW = 10;
 
+// Months displayed on Y-axis
 const months = [
   "January","February","March","April","May","June",
   "July","August","September","October","November","December"
 ];
 
-// Match screenshot-like geometry
-const margin = { top: 45, right: 15, bottom: 10, left: 95 };
-const cellW = 88;
-const cellH = 62;
+// Margin convention for SVG layout
+const margin = { top: 45, right: 20, bottom: 20, left: 95 };
 
-const tempDomain = [0, 40]; // matches the screenshot scale
+// Cell dimensions (controls overall grid spacing)
+const cellWidth = 88;
+const cellHeight = 62;
 
-let showMax = true; // toggle mode
+// Temperature domain for consistent scaling
+// Fixed to 0–40°C for visual comparability
+const temperatureDomain = [0, 40];
 
+// Toggle state (true = show MAX mode)
+let showMax = true;
+
+// Tooltip selection
 const tooltip = d3.select("#tooltip");
 
-// Containers
-const chartDiv = d3.select("#chart");
-const legendDiv = d3.select("#legend");
+// ========================== GLOBAL STATE =============================
 
-// ==============================
-// HELPERS
-// ==============================
+// This object stores processed data and references
+// Keeps code modular and easy to update
+let state = {
+  years: [],
+  yearMonthMap: new Map(),   // key: "year-month" → daily rows
+  svgGroup: null,
+  cells: []
+};
+
+// ========================== DATA PARSING =============================
+
+/**
+ * Converts raw CSV row into structured object
+ * This ensures consistent numeric typing and date extraction
+ */
 function parseRow(d) {
-  const dt = new Date(d.date); // <-- correct column name is "date"
+  const dateObj = new Date(d.date);
 
   return {
-    date: dt,
-    year: dt.getFullYear(),
-    month: dt.getMonth() + 1,
-    day: dt.getDate(),
-    max: +d.max_temperature, // <-- correct column name
-    min: +d.min_temperature  // <-- correct column name
+    date: dateObj,
+    year: dateObj.getFullYear(),
+    month: dateObj.getMonth() + 1,
+    day: dateObj.getDate(),
+    max: +d.max_temperature,
+    min: +d.min_temperature
   };
 }
 
-function lastNYears(allYears, n) {
-  return [...new Set(allYears)].sort((a,b) => a - b).slice(-n);
+/**
+ * Returns the last N years sorted ascending
+ */
+function getLastNYears(allYears, n) {
+  return [...new Set(allYears)]
+    .sort((a, b) => a - b)
+    .slice(-n);
 }
 
-function formatISODate(dt) {
-  const y = dt.getFullYear();
-  const m = String(dt.getMonth()+1).padStart(2, "0");
-  const d = String(dt.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
+// ========================== DATA PREPARATION =========================
 
-// Return { value, date } for tooltip based on mode
-function getExtremeDay(monthData, modeMax) {
-  if (modeMax) {
-    const best = monthData.reduce((a,b) => (a.max > b.max ? a : b));
-    return { value: best.max, date: best.date };
-  } else {
-    const best = monthData.reduce((a,b) => (a.min < b.min ? a : b));
-    return { value: best.min, date: best.date };
-  }
-}
-
-// ==============================
-// RENDER (build once, then update on toggle)
-// ==============================
-let state = {
-  years: [],
-  byYearMonth: new Map(), // key `${year}-${month}` -> day array
-  svg: null
-};
-
+/**
+ * Builds application state:
+ * - Filters last 10 years
+ * - Groups daily records by (year, month)
+ */
 function buildState(rows) {
-  const years = lastNYears(rows.map(r => r.year), YEARS_TO_SHOW);
-  const filtered = rows.filter(r => years.includes(r.year));
 
-  // Map year-month -> array of daily rows
-  const byYearMonth = new Map();
-  for (const r of filtered) {
+  const years = getLastNYears(rows.map(r => r.year), YEARS_TO_SHOW);
+
+  const filteredRows = rows.filter(r => years.includes(r.year));
+
+  const yearMonthMap = new Map();
+
+  // Group data into year-month buckets
+  filteredRows.forEach(r => {
     const key = `${r.year}-${r.month}`;
-    if (!byYearMonth.has(key)) byYearMonth.set(key, []);
-    byYearMonth.get(key).push(r);
-  }
+    if (!yearMonthMap.has(key)) {
+      yearMonthMap.set(key, []);
+    }
+    yearMonthMap.get(key).push(r);
+  });
 
-  // Sort days for lines
-  for (const arr of byYearMonth.values()) {
-    arr.sort((a,b) => a.day - b.day);
-  }
+  // Sort each month’s daily data by day (important for line chart)
+  yearMonthMap.forEach(arr => {
+    arr.sort((a, b) => a.day - b.day);
+  });
 
   state.years = years;
-  state.byYearMonth = byYearMonth;
+  state.yearMonthMap = yearMonthMap;
 }
 
-function initSVG() {
-  // Clear any previous
-  chartDiv.html("");
+// ========================== INITIALIZATION ===========================
 
-  const width = margin.left + margin.right + state.years.length * cellW;
-  const height = margin.top + margin.bottom + 12 * cellH;
+/**
+ * Initializes SVG container and static elements
+ */
+function initializeVisualization() {
 
-  const svg = chartDiv.append("svg")
+  const width =
+    margin.left + margin.right + state.years.length * cellWidth;
+
+  const height =
+    margin.top + margin.bottom + 12 * cellHeight;
+
+  const svg = d3.select("#chart")
+    .html("") // Clear existing
+    .append("svg")
     .attr("width", width)
     .attr("height", height);
 
-  const g = svg.append("g")
-    .attr("transform", `translate(${margin.left},${margin.top})`);
+  const group = svg.append("g")
+    .attr("transform",
+      `translate(${margin.left},${margin.top})`
+    );
 
-  state.svg = g;
+  state.svgGroup = group;
 
   drawAxisLabels();
-  drawLegend(); // static legend
-  drawCellsAndMiniCharts(); // create all cells once
-  updateModeStyling(); // apply initial MAX mode fill + tooltip behavior
+  drawLegend();
+  drawMatrixCells();
+  updateMode(); // Apply initial coloring + tooltip logic
 }
 
+// ========================== AXIS LABELS ==============================
+
+/**
+ * Draws year labels (top) and month labels (left)
+ */
 function drawAxisLabels() {
-  // Years on top
-  state.years.forEach((yr, i) => {
-    state.svg.append("text")
-      .attr("class", "axis-text")
-      .attr("x", i * cellW + cellW / 2)
+
+  // Year labels (X direction)
+  state.years.forEach((year, i) => {
+    state.svgGroup.append("text")
+      .attr("x", i * cellWidth + cellWidth / 2)
       .attr("y", -12)
       .attr("text-anchor", "middle")
-      .text(yr);
+      .attr("class", "axis-text")
+      .text(year);
   });
 
-  // Months on left
-  months.forEach((m, i) => {
-    state.svg.append("text")
-      .attr("class", "axis-text")
+  // Month labels (Y direction)
+  months.forEach((month, i) => {
+    state.svgGroup.append("text")
       .attr("x", -10)
-      .attr("y", i * cellH + cellH / 2)
+      .attr("y", i * cellHeight + cellHeight / 2)
       .attr("text-anchor", "end")
       .attr("alignment-baseline", "middle")
-      .text(m);
+      .attr("class", "axis-text")
+      .text(month);
   });
 }
 
-function drawCellsAndMiniCharts() {
-  // Color scale (fill updated later based on mode)
+// ========================== MATRIX CELLS =============================
+
+/**
+ * Creates each matrix cell and mini line charts
+ * NOTE: Color is applied later in updateMode()
+ */
+function drawMatrixCells() {
+
   const colorScale = d3.scaleSequential()
-    .interpolator(d3.interpolateSpectral) // closer to screenshot’s look
-    .domain([tempDomain[1], tempDomain[0]]); // invert so warmer = red-ish
+    .interpolator(d3.interpolateSpectral)
+    .domain([temperatureDomain[1], temperatureDomain[0]]);
 
-  // Mini chart scales (shared)
   const yScale = d3.scaleLinear()
-    .domain(tempDomain)
-    .range([cellH - 6, 6]);
+    .domain(temperatureDomain)
+    .range([cellHeight - 6, 6]);
 
-  // create one group per cell
   const cells = [];
 
-  state.years.forEach((year, col) => {
+  state.years.forEach((year, colIndex) => {
+
     for (let month = 1; month <= 12; month++) {
+
       const key = `${year}-${month}`;
-      const monthData = state.byYearMonth.get(key);
+      const monthData = state.yearMonthMap.get(key);
+
       if (!monthData) continue;
 
-      const gx = col * cellW;
-      const gy = (month - 1) * cellH;
+      const group = state.svgGroup.append("g")
+        .attr("transform",
+          `translate(${colIndex * cellWidth}, ${(month - 1) * cellHeight})`
+        );
 
-      const gCell = state.svg.append("g")
-        .attr("class", "cell-group")
-        .attr("transform", `translate(${gx},${gy})`)
-        .attr("data-key", key);
-
-      // background rect (fill updated in updateModeStyling)
-      gCell.append("rect")
+      // Background rectangle
+      const rect = group.append("rect")
         .attr("class", "cell")
-        .attr("width", cellW)
-        .attr("height", cellH);
+        .attr("width", cellWidth)
+        .attr("height", cellHeight);
 
-      // xScale depends on month length
+      // X-scale depends on month length
       const xScale = d3.scaleLinear()
         .domain([1, d3.max(monthData, d => d.day)])
-        .range([6, cellW - 6]);
+        .range([6, cellWidth - 6]);
 
-      // Max & min lines (always show both, like screenshot)
+      // Line generators
       const maxLine = d3.line()
         .x(d => xScale(d.day))
         .y(d => yScale(d.max));
@@ -185,118 +235,128 @@ function drawCellsAndMiniCharts() {
         .x(d => xScale(d.day))
         .y(d => yScale(d.min));
 
-      gCell.append("path")
+      // Draw MAX line
+      group.append("path")
         .datum(monthData)
         .attr("fill", "none")
         .attr("stroke", "limegreen")
         .attr("stroke-width", 1.3)
         .attr("d", maxLine);
 
-      gCell.append("path")
+      // Draw MIN line
+      group.append("path")
         .datum(monthData)
         .attr("fill", "none")
         .attr("stroke", "cyan")
         .attr("stroke-width", 1.3)
         .attr("d", minLine);
 
-      // store so we can update fill/tooltip by mode later
-      cells.push({ key, gCell, monthData, colorScale });
+      cells.push({ rect, monthData, colorScale });
     }
   });
 
-  // stash selection for updates
   state.cells = cells;
 }
 
-function updateModeStyling() {
+// ========================== MODE UPDATE ==============================
+
+/**
+ * Updates:
+ * - Cell color
+ * - Tooltip behavior
+ * When toggle button is clicked
+ */
+function updateMode() {
+
   const modeLabel = showMax ? "MAX" : "MIN";
 
-  // Update button text
-  d3.select("#toggleBtn").text(
-    showMax ? "Mode: MAX (Click to switch to MIN)" : "Mode: MIN (Click to switch to MAX)"
-  );
+  d3.select("#toggleBtn")
+    .text(showMax
+      ? "Mode: MAX (Click to switch to MIN)"
+      : "Mode: MIN (Click to switch to MAX)"
+    );
 
-  // Fill cells based on mode (monthly extreme)
-  state.cells.forEach(({ gCell, monthData, colorScale }) => {
+  state.cells.forEach(({ rect, monthData, colorScale }) => {
+
     const value = showMax
       ? d3.max(monthData, d => d.max)
       : d3.min(monthData, d => d.min);
 
-    gCell.select("rect.cell")
-      .attr("fill", colorScale(value))
+    rect.attr("fill", colorScale(value))
       .on("mouseover", () => tooltip.style("opacity", 1))
       .on("mousemove", (event) => {
-        const extreme = getExtremeDay(monthData, showMax);
-        tooltip.html(
-          `Mode: <b>${modeLabel}</b><br>` +
-          `Date: ${formatISODate(extreme.date)}<br>` +
-          `Temperature: <b>${extreme.value.toFixed(1)} °C</b>`
-        )
-        .style("left", (event.pageX + 12) + "px")
-        .style("top", (event.pageY - 18) + "px");
+
+        const extreme = showMax
+          ? monthData.reduce((a,b)=>a.max>b.max?a:b)
+          : monthData.reduce((a,b)=>a.min<b.min?a:b);
+
+        tooltip.html(`
+          <strong>Mode:</strong> ${modeLabel}<br>
+          <strong>Date:</strong> ${extreme.date.toISOString().split("T")[0]}<br>
+          <strong>Temperature:</strong> ${showMax ? extreme.max : extreme.min} °C
+        `)
+        .style("left", event.pageX + 10 + "px")
+        .style("top", event.pageY - 20 + "px");
       })
       .on("mouseout", () => tooltip.style("opacity", 0));
   });
 }
 
+// ========================== LEGEND ==================================
+
+/**
+ * Creates vertical temperature legend
+ */
 function drawLegend() {
-  legendDiv.html("");
 
-  const legendH = 320;
-  const legendW = 24;
+  const legendHeight = 300;
+  const legendWidth = 20;
 
-  const svg = legendDiv.append("svg")
+  const svg = d3.select("#legend")
+    .html("")
+    .append("svg")
     .attr("width", 90)
-    .attr("height", legendH + 50);
+    .attr("height", legendHeight + 40);
 
-  // Use same color scheme as cells
-  const colorScale = d3.scaleSequential()
+  const scale = d3.scaleSequential()
     .interpolator(d3.interpolateSpectral)
-    .domain([tempDomain[1], tempDomain[0]]);
+    .domain([temperatureDomain[1], temperatureDomain[0]]);
 
-  const defs = svg.append("defs");
-  const grad = defs.append("linearGradient")
-    .attr("id", "tempGrad")
+  const gradient = svg.append("defs")
+    .append("linearGradient")
+    .attr("id", "legendGradient")
     .attr("x1", "0%").attr("y1", "100%")
     .attr("x2", "0%").attr("y2", "0%");
 
-  // gradient stops
-  d3.range(0, 1.0001, 0.05).forEach(t => {
-    grad.append("stop")
-      .attr("offset", `${t * 100}%`)
-      .attr("stop-color", colorScale(tempDomain[0] + t * (tempDomain[1] - tempDomain[0])));
+  d3.range(0, 1.01, 0.05).forEach(t => {
+    gradient.append("stop")
+      .attr("offset", `${t*100}%`)
+      .attr("stop-color",
+        scale(temperatureDomain[0] + t*(temperatureDomain[1]-temperatureDomain[0]))
+      );
   });
 
-  svg.append("text")
-    .attr("class", "legend-title")
-    .attr("x", 0)
-    .attr("y", 14)
-    .text("Temperature");
-
-  // gradient bar
   svg.append("rect")
     .attr("x", 10)
-    .attr("y", 25)
-    .attr("width", legendW)
-    .attr("height", legendH)
-    .attr("fill", "url(#tempGrad)")
-    .attr("stroke", "#ddd");
+    .attr("y", 20)
+    .attr("width", legendWidth)
+    .attr("height", legendHeight)
+    .attr("fill", "url(#legendGradient)");
 
-  // labels (top=40, bottom=0)
-  svg.append("text").attr("x", 45).attr("y", 35).text("40 °C").style("font-size", "12px");
-  svg.append("text").attr("x", 45).attr("y", 25 + legendH).text("0 °C").style("font-size", "12px");
+  svg.append("text").attr("x", 40).attr("y", 30).text("40 °C");
+  svg.append("text").attr("x", 40).attr("y", legendHeight + 20).text("0 °C");
 }
 
-// ==============================
-// MAIN
-// ==============================
+// ========================== MAIN ====================================
+
+// Load CSV and initialize
 d3.csv(DATA_FILE, parseRow).then(rows => {
   buildState(rows);
-  initSVG();
+  initializeVisualization();
 });
 
-// Toggle behavior
+// Toggle event
 d3.select("#toggleBtn").on("click", () => {
   showMax = !showMax;
-  updateModeStyling();
+  updateMode();
 });
